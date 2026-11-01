@@ -2,7 +2,7 @@
 
 Live bus tracker for IcfaiTech Route #29 (Katedan → IFHE campus). An ESP32 on the bus reads GPS, computes the next stop and distance on the device, and publishes to an MQTT broker every 5 s. Anyone opens the map page in a browser and sees the bus on a real map with an ETA.
 
-**[Open the live map](https://sai-harish2007.github.io/iot-bus-tracker/web/)** — works on any phone/laptop, no install.
+**[Open the live map](https://sai-harish2007.github.io/iot-bus-tracker/)** — works on any phone/laptop, no install.
 
 ## Architecture
 
