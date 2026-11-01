@@ -17,7 +17,7 @@ GPS → ESP32 (TinyGPS++ NMEA parse, next-stop + distance on-device)
 | Path | What |
 |---|---|
 | `bus_tracker/bus_tracker.ino` | ESP32 firmware (LIVE via real GPS / REPLAY modes) |
-| `web/index.html` | Live map — single self-contained HTML page |
+| `docs/index.html` | Live map — single self-contained HTML page |
 | `wokwi/` | Wokwi simulation (no hardware needed to test the idea) |
 | `Abstract_Bus_Tracker.pdf` | Project abstract |
 | `DEMO.md` | 5-minute demo script used for the faculty evaluation |
@@ -45,7 +45,7 @@ Leave TX0/RX0 (USB upload pins) unconnected. The on-board **BOOT** button toggle
 2. Install libraries: **PubSubClient**, **TinyGPS++**, **Adafruit SSD1306**, **Adafruit GFX**.
 3. Edit `WIFI_SSID` / `WIFI_PASSWORD` in `bus_tracker.ino` (2.4 GHz hotspot).
 4. Board: *ESP32 Dev Module* → Upload.
-5. Open `web/index.html` (or the Pages link). When the OLED shows `MQTT:OK`, the pill turns **online** and the bus marker moves.
+5. Open `docs/index.html` (or the Pages link). When the OLED shows `MQTT:OK`, the pill turns **online** and the bus marker moves.
 
 ## Modes
 
