@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Location</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --mute:#667085; --ok:#12a150; --bad:#d92d20; --warn:#dc8a00; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  #map { position:absolute; inset:0; }
+  .panel { position:absolute; top:12px; right:12px; z-index:1000; width:230px; background:var(--card);
+           border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,.15); padding:14px 16px; font-size:14px; }
+  .panel h1 { font-size:16px; margin:0 0 8px; }
+  .row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eef0f3; }
+  .row span:first-child { color:var(--mute); }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; color:#fff; font-size:12px; font-weight:600; }
+  .ok { background:var(--ok); } .bad { background:var(--bad); } .warn { background:var(--warn); }
+  .coords { font-family:ui-monospace, monospace; font-size:12px; }
+  @media (max-width:600px) { .panel { left:12px; right:12px; width:auto; top:auto; bottom:12px; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>📍 Live Location</h1>
+  <div class="row"><span>Broker</span><span id="conn" class="pill warn">connecting</span></div>
+  <div class="row"><span>Device</span><span id="status" class="pill warn">unknown</span></div>
+  <div class="row"><span>GPS fix</span><span id="fix">–</span></div>
+  <div class="row"><span>Speed</span><span id="spd">–</span></div>
+  <div class="row"><span>Satellites</span><span id="sats">–</span></div>
+  <div class="row"><span>Latitude</span><span id="lat" class="coords">–</span></div>
+  <div class="row"><span>Longitude</span><span id="lon" class="coords">–</span></div>
+  <div class="row"><span>Last update</span><span id="ago">–</span></div>
+  <small>The ESP32 publishes its GPS position every 5 s to the MQTT topic below. Same topic must match the firmware.</small>
+</div>
+
+<script>
+// Must match the firmware: TOPIC_LOC = PREFIX + "/loc", TOPIC_STATUS = PREFIX + "/status"
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+let PREFIX = new URLSearchParams(location.search).get("topic") || "icfai/bus/101";
+
+const $ = id => document.getElementById(id);
+// Esri public tiles need no key and work from file:// too (same tiles as the bus page)
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/";
+const map = L.map("map").setView([17.4, 78.4], 12);
+L.tileLayer(ESRI + "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, maxNativeZoom: 17, attribution: "Tiles © Esri" }).addTo(map);
+
+const pin = L.divIcon({ html: "<div style='font-size:32px'>📍</div>", className: "", iconSize: [32, 32], iconAnchor: [16, 30] });
+let me = null, trail = L.polyline([], { color: "#d92d20", weight: 4, opacity: .7 }).addTo(map);
+let lastMsgAt = 0, centred = false;
+
+function pill(el, text, cls) { el.textContent = text; el.className = "pill " + cls; }
+
+function onLocation(d) {
+  lastMsgAt = Date.now();
+  $("fix").textContent  = d.fix ? "YES" : "NO (searching)";
+  $("spd").textContent  = d.spd != null ? `${(+d.spd).toFixed(1)} km/h` : "–";
+  $("sats").textContent = d.sats ?? "–";
+  $("lat").textContent  = d.fix ? d.lat.toFixed(6) : "–";
+  $("lon").textContent  = d.fix ? d.lon.toFixed(6) : "–";
+  if (!d.fix || (d.lat === 0 && d.lon === 0)) return;   // 0,0 means no fix — don't move the pin
+  const p = [d.lat, d.lon];
+  if (!me) me = L.marker(p, { icon: pin }).addTo(map);
+  me.setLatLng(p); trail.addLatLng(p);
+  if (!centred) { map.setView(p, 17); centred = true; }
+}
+
+let client;
+client = mqtt.connect(BROKER, { clientId: "web_" + Math.random().toString(16).slice(2, 8) });
+client.on("connect", () => {
+  pill($("conn"), "connected", "ok");
+  client.subscribe([PREFIX + "/loc", PREFIX + "/status"]);
+});
+client.on("reconnect", () => pill($("conn"), "reconnecting", "warn"));
+client.on("error", e => { pill($("conn"), "error", "bad"); console.error(e); });
+client.on("message", (topic, buf) => {
+  const msg = buf.toString();
+  if (topic.endsWith("/status")) {
+    pill($("status"), msg, msg === "online" ? "ok" : "bad");
+  } else {
+    try { onLocation(JSON.parse(msg)); } catch (e) { console.warn("bad JSON", msg); }
+  }
+});
+
+setInterval(() => {
+  if (!lastMsgAt) return;
+  const s = Math.round((Date.now() - lastMsgAt) / 1000);
+  $("ago").textContent = `${s}s ago`;
+  $("ago").style.color = s > 15 ? "var(--bad)" : "";
+}, 1000);
+</script>
+</body>
+</html>
