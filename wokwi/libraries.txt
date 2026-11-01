@@ -1,0 +1,6 @@
+# Wokwi installs these from the Arduino library registry
+Adafruit SSD1306
+Adafruit GFX Library
+Adafruit BusIO
+TinyGPSPlus
+PubSubClient

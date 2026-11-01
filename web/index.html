@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Live Bus Tracker</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --mute:#667085; --ok:#12a150; --bad:#d92d20; --warn:#dc8a00; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  #map { position:absolute; inset:0; }
+  .panel { position:absolute; top:12px; right:12px; z-index:1000; width:260px; background:var(--card);
+           border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,.15); padding:14px 16px; font-size:14px; }
+  .panel h1 { font-size:16px; margin:0 0 8px; }
+  .row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eef0f3; }
+  .row span:first-child { color:var(--mute); }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; color:#fff; font-size:12px; font-weight:600; }
+  .ok { background:var(--ok); } .bad { background:var(--bad); } .warn { background:var(--warn); }
+  input { width:100%; padding:6px; margin-top:8px; font:inherit; font-size:12px; }
+  button { margin-top:6px; width:100%; padding:7px; font:inherit; cursor:pointer; }
+  small { color:var(--mute); }
+  @media (max-width:600px) { .panel { left:12px; right:12px; width:auto; top:auto; bottom:12px; } }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div class="panel">
+  <h1>🚌 Route 29 (Katedan) — Live</h1>
+  <div class="row"><span>Broker</span><span id="conn" class="pill warn">connecting</span></div>
+  <div class="row"><span>Bus</span><span id="status" class="pill warn">unknown</span></div>
+  <div class="row"><span>GPS fix</span><span id="fix">–</span></div>
+  <div class="row"><span>Mode</span><span id="mode">–</span></div>
+  <div class="row"><span>Speed</span><span id="spd">–</span></div>
+  <div class="row"><span>Satellites</span><span id="sats">–</span></div>
+  <div class="row"><span>Next stop</span><span id="nxt">–</span></div>
+  <div class="row"><span>Distance</span><span id="dist">–</span></div>
+  <div class="row"><span>ETA</span><span id="eta">–</span></div>
+  <div class="row"><span>Last update</span><span id="ago">–</span></div>
+  <input id="topic" title="Topic prefix (must match the ESP32 code)">
+  <button id="apply">Change topic</button>
+  <button id="test">Send a test point</button>
+  <small>Raw messages are logged in the browser console (F12).</small>
+</div>
+
+<script>
+// Must match the firmware: TOPIC_LOC = PREFIX + "/loc", TOPIC_STATUS = PREFIX + "/status"
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+let PREFIX = new URLSearchParams(location.search).get("topic") || "icfai/bus/101";
+
+// Same stops as the `route[]` array in the ESP32 sketch
+// IFHE Route #29 (Katedan). Coordinates are approximate (OpenStreetMap area lookups, 30 Oct 2026)
+const STOPS = [
+  { name: "Katedan - Durga Nagar (7:45)",        lat: 17.312664, lon: 78.446796 },
+  { name: "Aramgarh Petrol Pump (7:50)",         lat: 17.321680, lon: 78.431943 },
+  { name: "Shivarampally Pillar 290 (7:53)",     lat: 17.333641, lon: 78.429529 },
+  { name: "Upparpally Pillar 174 (8:00)",        lat: 17.357680, lon: 78.420001 },
+  { name: "Rajapushpa, Attapur (8:05)",          lat: 17.370782, lon: 78.422044 },
+  { name: "IFHE Campus",                         lat: 17.422209, lon: 78.218220 },
+];
+
+const $ = id => document.getElementById(id);
+const map = L.map("map").setView([STOPS[0].lat, STOPS[0].lon], 14);
+// OSM and CARTO refuse pages opened as file:// (no Referer); Esri's public tiles need no key
+const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/";
+const streets = L.tileLayer(ESRI + "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, maxNativeZoom: 17, attribution: "Tiles © Esri" }).addTo(map); // no street tiles past z17 in Hyderabad; upscale instead
+const satellite = L.tileLayer(ESRI + "World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, attribution: "Tiles © Esri" });
+L.control.layers({ "Streets": streets, "Satellite": satellite }, null, { position: "topleft" }).addTo(map);
+
+STOPS.forEach((s, i) => L.circleMarker([s.lat, s.lon], { radius: 7, color: "#1d4ed8", fillOpacity: .8 })
+  .addTo(map).bindTooltip(`${i + 1}. ${s.name}`));
+// Straight dashed line first; replaced by the real road path once OSRM answers
+const routeLine = L.polyline(STOPS.map(s => [s.lat, s.lon]), { color: "#1d4ed8", weight: 3, dashArray: "6 6", opacity: .5 }).addTo(map);
+
+// Free public OSRM router: returns the driving path along roads between points ([lat,lon] pairs)
+async function roadPath(points) {
+  const coords = points.map(([lat, lon]) => `${lon},${lat}`).join(";");
+  const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+  const d = await r.json();
+  if (d.code !== "Ok") throw new Error(d.code);
+  return d.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+}
+
+roadPath(STOPS.map(s => [s.lat, s.lon]))
+  .then(path => routeLine.setLatLngs(path).setStyle({ dashArray: null, opacity: .6, weight: 5 }))
+  .catch(e => console.warn("road routing failed, keeping straight line", e));
+
+const busIcon = L.divIcon({ html: "<div style='font-size:28px'>🚌</div>", className: "", iconSize: [32, 32], iconAnchor: [16, 16] });
+let bus = null;
+const trail = L.polyline([], { color: "#d92d20", weight: 4 }).addTo(map);
+let lastMsgAt = 0, firstFix = true;
+
+function pill(el, text, cls) { el.textContent = text; el.className = "pill " + cls; }
+
+function onLocation(d) {
+  lastMsgAt = Date.now();
+  $("fix").textContent  = d.fix ? `YES` : "NO (searching)";
+  $("mode").textContent = d.mode || "live";
+  $("spd").textContent  = d.spd != null ? `${(+d.spd).toFixed(1)} km/h` : "–";
+  $("sats").textContent = d.sats ?? "–";
+  $("nxt").textContent  = d.nxt ? (STOPS[d.nxt - 1]?.name || `Stop ${d.nxt}`) : "–";
+  $("dist").textContent = d.dist != null ? `${d.dist} m` : "–";
+  // ETA = distance / speed; only meaningful when the bus is moving
+  $("eta").textContent  = d.dist != null && d.spd > 3 ? `${Math.ceil(d.dist / (d.spd / 3.6) / 60)} min` : "–";
+
+  // No fix → firmware sends 0,0. Don't jump the marker to the Atlantic.
+  if (!d.fix || (d.lat === 0 && d.lon === 0)) return;
+  const p = [d.lat, d.lon];
+  if (!bus) bus = L.marker(p, { icon: busIcon }).addTo(map);
+  if (firstFix) { map.setView(p, 16); firstFix = false; }
+  moveQueue = moveQueue.then(() => moveTo(p));   // one move at a time, in arrival order
+}
+
+// Moves the bus to p. Gaps over 100 m (replay mode jumps stop to stop) are routed along roads
+// and animated; short real-GPS gaps are already on the road, so they're drawn directly.
+let moveQueue = Promise.resolve(), lastPos = null;
+async function moveTo(p) {
+  let path = [p];
+  if (lastPos && map.distance(lastPos, p) > 100) {
+    try { path = await roadPath([lastPos, p]); } catch (e) { console.warn("routing failed, drawing straight", e); }
+  }
+  lastPos = p;
+  const stepMs = Math.min(40, 4000 / path.length);  // finish before the next 5 s update
+  for (const q of path) {
+    bus.setLatLng(q);
+    trail.addLatLng(q);
+    if (path.length > 1) await new Promise(r => setTimeout(r, stepMs));
+  }
+}
+
+let client;
+function connect() {
+  if (client) client.end(true);
+  $("topic").value = PREFIX;
+  client = mqtt.connect(BROKER, { clientId: "web_" + Math.random().toString(16).slice(2, 8) });
+  client.on("connect", () => {
+    pill($("conn"), "connected", "ok");
+    client.subscribe([PREFIX + "/loc", PREFIX + "/status"]);
+  });
+  client.on("reconnect", () => pill($("conn"), "reconnecting", "warn"));
+  client.on("error", e => { pill($("conn"), "error", "bad"); console.error(e); });
+  client.on("message", (topic, buf) => {
+    const msg = buf.toString();
+    console.log(topic, msg);
+    if (topic.endsWith("/status")) {
+      pill($("status"), msg, msg === "online" ? "ok" : "bad");
+    } else {
+      try { onLocation(JSON.parse(msg)); } catch (e) { console.warn("bad JSON", msg); }
+    }
+  });
+}
+
+$("apply").onclick = () => { PREFIX = $("topic").value.trim(); firstFix = true; lastPos = null; trail.setLatLngs([]); connect(); };
+
+// Publishes one fake point so you can check the map works without the ESP32
+let testI = 0;
+$("test").onclick = () => {
+  const s = STOPS[testI++ % STOPS.length];
+  client.publish(PREFIX + "/loc", JSON.stringify({ id: 101, lat: s.lat, lon: s.lon, spd: 30, sats: 0,
+    fix: true, nxt: (testI % STOPS.length) + 1, dist: 500, seq: 0, mode: "web-test" }));
+};
+
+setInterval(() => {
+  if (!lastMsgAt) return;
+  const s = Math.round((Date.now() - lastMsgAt) / 1000);
+  $("ago").textContent = `${s}s ago`;
+  $("ago").style.color = s > 15 ? "var(--bad)" : "";
+}, 1000);
+
+connect();
+</script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "author": "Sai Haresh Anand S",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "wokwi-esp32-devkit-v1", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "board-ssd1306", "id": "oled", "top": -130, "left": 220, "attrs": { "i2cAddress": "0x3c" } },
+    { "type": "wokwi-pushbutton", "id": "btn", "top": 160, "left": 240, "attrs": { "color": "red", "label": "GPS LOST (hold)" } }
+  ],
+  "connections": [
+    [ "oled:GND", "esp:GND.1", "black", [] ],
+    [ "oled:VCC", "esp:3V3", "red", [] ],
+    [ "oled:SCL", "esp:D22", "gray", [] ],
+    [ "oled:SDA", "esp:D21", "blue", [] ],
+    [ "btn:1.l", "esp:D4", "green", [] ],
+    [ "btn:2.l", "esp:GND.2", "black", [] ]
+  ],
+  "dependencies": {}
+}
