@@ -51,7 +51,7 @@ L.tileLayer(ESRI + "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
   { maxZoom: 19, maxNativeZoom: 17, attribution: "Tiles © Esri" }).addTo(map);
 
 const pin = L.divIcon({ html: "<div style='font-size:32px'>📍</div>", className: "", iconSize: [32, 32], iconAnchor: [16, 30] });
-let me = null, trail = L.polyline([], { color: "#d92d20", weight: 4, opacity: .7 }).addTo(map);
+let me = null;
 let lastMsgAt = 0, centred = false;
 
 function pill(el, text, cls) { el.textContent = text; el.className = "pill " + cls; }
@@ -66,7 +66,7 @@ function onLocation(d) {
   if (!d.fix || (d.lat === 0 && d.lon === 0)) return;   // 0,0 means no fix — don't move the pin
   const p = [d.lat, d.lon];
   if (!me) me = L.marker(p, { icon: pin }).addTo(map);
-  me.setLatLng(p); trail.addLatLng(p);
+  me.setLatLng(p);
   if (!centred) { map.setView(p, 17); centred = true; }
 }
 
