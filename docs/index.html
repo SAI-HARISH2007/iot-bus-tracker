@@ -3,46 +3,98 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Live Bus Tracker</title>
+<title>Route 29 Bus Tracker</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/mqtt@4.3.7/dist/mqtt.min.js"></script>
 <style>
-  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --mute:#667085; --ok:#12a150; --bad:#d92d20; --warn:#dc8a00; }
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1b1f24; --mute:#667085; --line:#eef0f3;
+          --ok:#12a150; --bad:#d92d20; --warn:#dc8a00; --blue:#1d4ed8; --me:#2563eb; }
   * { box-sizing:border-box; }
   body { margin:0; font-family:system-ui, sans-serif; background:var(--bg); color:var(--ink); }
   #map { position:absolute; inset:0; }
-  .panel { position:absolute; top:12px; right:12px; z-index:1000; width:260px; background:var(--card);
-           border-radius:12px; box-shadow:0 4px 20px rgba(0,0,0,.15); padding:14px 16px; font-size:14px; }
-  .panel h1 { font-size:16px; margin:0 0 8px; }
-  .row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid #eef0f3; }
+  .panel { position:absolute; top:12px; right:12px; z-index:1000; width:320px; max-height:calc(100% - 24px);
+           overflow:auto; background:var(--card); border-radius:14px; box-shadow:0 4px 20px rgba(0,0,0,.15);
+           padding:14px 16px; font-size:14px; }
+  .panel h1 { font-size:16px; margin:0 0 8px; display:flex; justify-content:space-between; align-items:center; }
+  .row { display:flex; justify-content:space-between; padding:3px 0; border-bottom:1px solid var(--line); }
   .row span:first-child { color:var(--mute); }
   .pill { display:inline-block; padding:2px 8px; border-radius:999px; color:#fff; font-size:12px; font-weight:600; }
   .ok { background:var(--ok); } .bad { background:var(--bad); } .warn { background:var(--warn); }
-  input { width:100%; padding:6px; margin-top:8px; font:inherit; font-size:12px; }
-  button { margin-top:6px; width:100%; padding:7px; font:inherit; cursor:pointer; }
+  .alert { margin:8px 0; padding:8px 10px; border-radius:8px; font-size:13px; font-weight:600; display:none; }
+  .alert.show { display:block; }
+  .alert.bad { background:#fde8e7; color:var(--bad); } .alert.warn { background:#fff4e0; color:#9a6200; }
+  .banner { margin:10px 0; padding:10px 12px; border-radius:10px; background:#eaf1ff; color:#173a8a; font-size:14px; }
+  .banner b { font-size:15px; }
+  .banner.go { background:#e5f6ec; color:#0b6b35; } .banner.late { background:#fde8e7; color:var(--bad); }
+  h2 { font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--mute); margin:12px 0 4px; }
+  ol.stops { list-style:none; margin:0; padding:0; }
+  ol.stops li { display:grid; grid-template-columns:16px 1fr auto; gap:8px; align-items:center; padding:5px 0;
+                border-bottom:1px solid var(--line); }
+  ol.stops .dot { width:10px; height:10px; border-radius:50%; background:var(--blue); margin:auto; }
+  ol.stops .t { text-align:right; font-variant-numeric:tabular-nums; font-size:12px; color:var(--mute); }
+  ol.stops .t b { color:var(--ink); }
+  ol.stops li.passed { color:var(--mute); } ol.stops li.passed .dot { background:#c3c8d0; }
+  ol.stops li.next { font-weight:700; } ol.stops li.next .dot { background:var(--ok); box-shadow:0 0 0 4px #12a15033; }
+  ol.stops li.mine .name::after { content:" · your stop"; color:var(--me); font-weight:600; font-size:12px; }
+  button, select, input { font:inherit; font-size:13px; }
+  button { padding:7px 10px; cursor:pointer; border:1px solid #d0d5dd; background:#fff; border-radius:8px; }
+  button.primary { background:var(--me); color:#fff; border-color:var(--me); width:100%; margin-top:6px; }
+  select, input { width:100%; padding:6px; margin-top:6px; border:1px solid #d0d5dd; border-radius:8px; }
+  details { margin-top:10px; } summary { cursor:pointer; color:var(--mute); font-size:13px; }
+  details button { width:100%; margin-top:6px; }
   small { color:var(--mute); }
-  @media (max-width:600px) { .panel { left:12px; right:12px; width:auto; top:auto; bottom:12px; } }
+  .fab { position:absolute; z-index:1000; left:12px; bottom:24px; display:flex; flex-direction:column; gap:8px; }
+  .fab button { width:44px; height:44px; border-radius:50%; font-size:20px; box-shadow:0 2px 10px rgba(0,0,0,.2); padding:0; }
+  .fab button.on { background:var(--blue); color:#fff; border-color:var(--blue); }
+  .me-dot { width:16px; height:16px; border-radius:50%; background:var(--me); border:3px solid #fff;
+            box-shadow:0 0 0 6px #2563eb40; }
+  #toggle { display:none; border:none; background:none; font-size:18px; padding:0 4px; }
+  @media (max-width:600px) {
+    .panel { left:8px; right:8px; width:auto; top:auto; bottom:8px; max-height:55%; }
+    .panel.collapsed { max-height:none; overflow:hidden; }
+    .panel.collapsed > :not(h1):not(.banner):not(.alert) { display:none; }
+    #toggle { display:inline; }
+    .fab { left:auto; right:12px; bottom:auto; top:12px; }
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
-<div class="panel">
-  <h1>🚌 Route 29 (Katedan) — Live</h1>
-  <div class="row"><span>Broker</span><span id="conn" class="pill warn">connecting</span></div>
-  <div class="row"><span>Bus</span><span id="status" class="pill warn">unknown</span></div>
-  <div class="row"><span>GPS fix</span><span id="fix">–</span></div>
+
+<div class="fab">
+  <button id="followBtn" class="on" title="Follow the bus">🚌</button>
+  <button id="meBtn" title="Show my location">📍</button>
+  <button id="fitBtn" title="Show the whole route">🗺️</button>
+</div>
+
+<div class="panel" id="panel">
+  <h1><span>🚌 Route 29 (Katedan)</span>
+      <span><span id="status" class="pill warn">connecting</span><button id="toggle" title="Expand/collapse">▾</button></span></h1>
+
+  <div id="alert" class="alert"></div>
+  <div id="banner" class="banner">Tap <b>📍 Where's my bus?</b> to see when to leave for your stop.</div>
+  <button id="whereBtn" class="primary">📍 Where's my bus?</button>
+  <select id="myStop" title="Your stop"><option value="auto">My stop: nearest to me</option></select>
+
+  <h2>Stops</h2>
+  <ol class="stops" id="stops"></ol>
+
+  <h2>Bus</h2>
   <div class="row"><span>Mode</span><span id="mode">–</span></div>
+  <div class="row"><span>GPS fix</span><span id="fix">–</span></div>
   <div class="row"><span>Speed</span><span id="spd">–</span></div>
   <div class="row"><span>Satellites</span><span id="sats">–</span></div>
-  <div class="row"><span>Next stop</span><span id="nxt">–</span></div>
-  <div class="row"><span>Distance</span><span id="dist">–</span></div>
-  <div class="row"><span>ETA</span><span id="eta">–</span></div>
   <div class="row"><span>Last update</span><span id="ago">–</span></div>
-  <input id="topic" title="Topic prefix (must match the ESP32 code)">
-  <button id="apply">Change topic</button>
-  <button id="test">Send a test point</button>
-  <small>Raw messages are logged in the browser console (F12).</small>
+
+  <details>
+    <summary>Developer</summary>
+    <div class="row"><span>Broker</span><span id="conn" class="pill warn">connecting</span></div>
+    <input id="topic" title="Topic prefix (must match the ESP32 code)">
+    <button id="apply">Change topic</button>
+    <button id="test">Send a test point (simulated)</button>
+    <small>Raw messages are logged in the browser console (F12).</small>
+  </details>
 </div>
 
 <script>
@@ -53,65 +105,100 @@ let PREFIX = new URLSearchParams(location.search).get("topic") || "icfai/bus/101
 // Same stops as the `route[]` array in the ESP32 sketch
 // IFHE Route #29 (Katedan). Coordinates are approximate (OpenStreetMap area lookups, 30 Oct 2026)
 const STOPS = [
-  { name: "Katedan - Durga Nagar (7:45)",        lat: 17.312664, lon: 78.446796 },
-  { name: "Aramgarh Petrol Pump (7:50)",         lat: 17.321680, lon: 78.431943 },
-  { name: "Shivarampally Pillar 290 (7:53)",     lat: 17.333641, lon: 78.429529 },
-  { name: "Upparpally Pillar 174 (8:00)",        lat: 17.357680, lon: 78.420001 },
-  { name: "Rajapushpa, Attapur (8:05)",          lat: 17.370782, lon: 78.422044 },
-  { name: "IFHE Campus",                         lat: 17.422209, lon: 78.218220 },
+  { name: "Katedan - Durga Nagar",    time: "7:45", lat: 17.312664, lon: 78.446796 },
+  { name: "Aramgarh Petrol Pump",     time: "7:50", lat: 17.321680, lon: 78.431943 },
+  { name: "Shivarampally Pillar 290", time: "7:53", lat: 17.333641, lon: 78.429529 },
+  { name: "Upparpally Pillar 174",    time: "8:00", lat: 17.357680, lon: 78.420001 },
+  { name: "Rajapushpa, Attapur",      time: "8:05", lat: 17.370782, lon: 78.422044 },
+  { name: "IFHE Campus",              time: "9:00", lat: 17.422209, lon: 78.218220 },
 ];
+const FALLBACK_KMPH = 25;      // assumed bus speed when it is standing still
+const STALE_S = 15;            // no message for this long = data is stale
 
 const $ = id => document.getElementById(id);
-const map = L.map("map").setView([STOPS[0].lat, STOPS[0].lon], 14);
+const map = L.map("map", { zoomControl: false }).setView([STOPS[0].lat, STOPS[0].lon], 14);
+L.control.zoom({ position: "topleft" }).addTo(map);
 // OSM and CARTO refuse pages opened as file:// (no Referer); Esri's public tiles need no key
 const ESRI = "https://server.arcgisonline.com/ArcGIS/rest/services/";
 const streets = L.tileLayer(ESRI + "World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-  { maxZoom: 19, maxNativeZoom: 17, attribution: "Tiles © Esri" }).addTo(map); // no street tiles past z17 in Hyderabad; upscale instead
+  { maxZoom: 19, maxNativeZoom: 17, attribution: "Tiles © Esri · Routing © OSRM/OpenStreetMap" }).addTo(map); // no street tiles past z17 in Hyderabad; upscale instead
 const satellite = L.tileLayer(ESRI + "World_Imagery/MapServer/tile/{z}/{y}/{x}",
   { maxZoom: 19, attribution: "Tiles © Esri" });
 L.control.layers({ "Streets": streets, "Satellite": satellite }, null, { position: "topleft" }).addTo(map);
 
 STOPS.forEach((s, i) => L.circleMarker([s.lat, s.lon], { radius: 7, color: "#1d4ed8", fillOpacity: .8 })
-  .addTo(map).bindTooltip(`${i + 1}. ${s.name}`));
+  .addTo(map).bindTooltip(`${i + 1}. ${s.name} (${s.time})`));
 // Straight dashed line first; replaced by the real road path once OSRM answers
 const routeLine = L.polyline(STOPS.map(s => [s.lat, s.lon]), { color: "#1d4ed8", weight: 3, dashArray: "6 6", opacity: .5 }).addTo(map);
 
-// Free public OSRM router: returns the driving path along roads between points ([lat,lon] pairs)
-async function roadPath(points) {
+// Free public OSRM routers ([lat,lon] pairs in, path + per-leg durations out)
+const ROUTERS = { drive: "https://router.project-osrm.org/route/v1/driving/",
+                  walk:  "https://routing.openstreetmap.de/routed-foot/route/v1/driving/" };
+async function osrm(points, profile = "drive") {
   const coords = points.map(([lat, lon]) => `${lon},${lat}`).join(";");
-  const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+  const r = await fetch(`${ROUTERS[profile]}${coords}?overview=full&geometries=geojson`);
   const d = await r.json();
   if (d.code !== "Ok") throw new Error(d.code);
-  return d.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]);
+  return { path: d.routes[0].geometry.coordinates.map(([lon, lat]) => [lat, lon]),
+           legs: d.routes[0].legs, distance: d.routes[0].distance, duration: d.routes[0].duration };
 }
+const roadPath = async points => (await osrm(points)).path;
 
-roadPath(STOPS.map(s => [s.lat, s.lon]))
-  .then(path => routeLine.setLatLngs(path).setStyle({ dashArray: null, opacity: .6, weight: 5 }))
+// legSec[i] = driving seconds from stop i to stop i+1 (used for ETAs to later stops)
+let legSec = null;
+osrm(STOPS.map(s => [s.lat, s.lon]))
+  .then(r => { routeLine.setLatLngs(r.path).setStyle({ dashArray: null, opacity: .6, weight: 5 });
+               legSec = r.legs.map(l => l.duration); render(); })
   .catch(e => console.warn("road routing failed, keeping straight line", e));
 
-const busIcon = L.divIcon({ html: "<div style='font-size:28px'>🚌</div>", className: "", iconSize: [32, 32], iconAnchor: [16, 16] });
-let bus = null;
-let lastMsgAt = 0, firstFix = true;
+// ---------- stop list ----------
+STOPS.slice(0, -1).forEach((s, i) => $("myStop").add(new Option(`My stop: ${s.name}`, i)));
+function renderStops(etas) {
+  $("stops").innerHTML = STOPS.map((s, i) => {
+    const cls = i < nextIdx ? "passed" : i === nextIdx ? "next" : "";
+    const eta = etas?.[i] != null ? `<b>${fmtMin(etas[i])}</b><br>` : "";
+    return `<li class="${cls} ${i === myIdx ? "mine" : ""}"><span class="dot"></span>
+            <span class="name">${s.name}</span><span class="t">${eta}${s.time}</span></li>`;
+  }).join("");
+}
+const fmtMin = sec => sec < 60 ? "now" : `${Math.round(sec / 60)} min`;
 
-function pill(el, text, cls) { el.textContent = text; el.className = "pill " + cls; }
+// ---------- bus state ----------
+const busIcon = L.divIcon({ html: "<div style='font-size:28px'>🚌</div>", className: "", iconSize: [32, 32], iconAnchor: [16, 16] });
+let bus = null, last = null, lastMsgAt = 0, busOnline = null, follow = true;
+let nextIdx = 0;               // index of the stop the bus is heading to (from the ESP32's "nxt")
+
+// Seconds until the bus reaches each upcoming stop. Next stop uses the ESP32's own distance;
+// later stops add the road-leg durations from OSRM.
+function busEtas() {
+  if (!last || !last.fix) return null;
+  const v = (last.spd > 3 ? last.spd : FALLBACK_KMPH) / 3.6;
+  const etas = [];
+  let t = last.dist / v;
+  for (let i = nextIdx; i < STOPS.length; i++) {
+    etas[i] = t;
+    if (legSec && i < legSec.length) t += legSec[i];
+  }
+  return etas;
+}
 
 function onLocation(d) {
   lastMsgAt = Date.now();
-  $("fix").textContent  = d.fix ? `YES` : "NO (searching)";
-  $("mode").textContent = d.mode || "live";
+  last = d;
+  const sim = d.mode && d.mode !== "live";
+  $("mode").innerHTML   = sim ? `<span class="pill warn">${d.mode.toUpperCase()} · simulated</span>` : `<span class="pill ok">LIVE GPS</span>`;
+  $("fix").textContent  = d.fix ? "YES" : "NO (searching)";
   $("spd").textContent  = d.spd != null ? `${(+d.spd).toFixed(1)} km/h` : "–";
   $("sats").textContent = d.sats ?? "–";
-  $("nxt").textContent  = d.nxt ? (STOPS[d.nxt - 1]?.name || `Stop ${d.nxt}`) : "–";
-  $("dist").textContent = d.dist != null ? `${d.dist} m` : "–";
-  // ETA = distance / speed; only meaningful when the bus is moving
-  $("eta").textContent  = d.dist != null && d.spd > 3 ? `${Math.ceil(d.dist / (d.spd / 3.6) / 60)} min` : "–";
+  if (d.nxt) nextIdx = d.nxt - 1;
 
   // No fix → firmware sends 0,0. Don't jump the marker to the Atlantic.
-  if (!d.fix || (d.lat === 0 && d.lon === 0)) return;
-  const p = [d.lat, d.lon];
-  if (!bus) bus = L.marker(p, { icon: busIcon }).addTo(map);
-  if (firstFix) { map.setView(p, 16); firstFix = false; }
-  moveQueue = moveQueue.then(() => moveTo(p));   // one move at a time, in arrival order
+  if (d.fix && !(d.lat === 0 && d.lon === 0)) {
+    const p = [d.lat, d.lon];
+    if (!bus) { bus = L.marker(p, { icon: busIcon, zIndexOffset: 1000 }).addTo(map); map.setView(p, 16); }
+    moveQueue = moveQueue.then(() => moveTo(p));   // one move at a time, in arrival order
+  }
+  render();
 }
 
 // Moves the bus to p. Gaps over 100 m (replay mode jumps stop to stop) are routed along roads
@@ -126,10 +213,94 @@ async function moveTo(p) {
   const stepMs = Math.min(40, 4000 / path.length);  // finish before the next 5 s update
   for (const q of path) {
     bus.setLatLng(q);
+    if (follow) map.panTo(q, { animate: false });
     if (path.length > 1) await new Promise(r => setTimeout(r, stepMs));
   }
 }
 
+// ---------- "Where's my bus?": the rider's phone location + walking route to their stop ----------
+let me = null, meMarker = null, walkLine = null, walk = null, myIdx = -1, walkKey = "";
+function startLocating() {
+  if (!navigator.geolocation) return banner("This browser can't share location.", "late");
+  banner("Finding your location…");
+  navigator.geolocation.watchPosition(pos => {
+    me = [pos.coords.latitude, pos.coords.longitude];
+    if (!meMarker) {
+      meMarker = L.marker(me, { icon: L.divIcon({ html: "<div class='me-dot'></div>", className: "", iconSize: [22, 22], iconAnchor: [11, 11] }) })
+        .addTo(map).bindTooltip("You");
+      follow = false; $("followBtn").classList.remove("on");
+    } else meMarker.setLatLng(me);
+    updateWalk();
+  }, err => banner(`Location blocked (${err.message}). Allow location for this site and try again.`, "late"),
+  { enableHighAccuracy: true, maximumAge: 10000 });
+}
+
+function pickMyStop() {
+  const chosen = $("myStop").value;
+  if (chosen !== "auto") return +chosen;
+  // Nearest stop the bus hasn't passed yet (campus is the destination, not a pickup)
+  let best = -1, bestD = Infinity;
+  for (let i = Math.min(nextIdx, STOPS.length - 2); i < STOPS.length - 1; i++) {
+    const dd = map.distance(me, [STOPS[i].lat, STOPS[i].lon]);
+    if (dd < bestD) { bestD = dd; best = i; }
+  }
+  return best;
+}
+
+async function updateWalk() {
+  if (!me) return;
+  myIdx = pickMyStop();
+  const s = STOPS[myIdx];
+  // Re-route only when the stop changes or the rider moves ~50 m (keeps the free router happy)
+  const key = `${myIdx}:${me[0].toFixed(4)},${me[1].toFixed(4)}`;
+  if (key !== walkKey) {
+    walkKey = key;
+    try { walk = await osrm([me, [s.lat, s.lon]], "walk"); }
+    catch (e) {   // fallback: straight line at 4.5 km/h, 1.3x for street detours
+      const d = map.distance(me, [s.lat, s.lon]) * 1.3;
+      walk = { path: [me, [s.lat, s.lon]], distance: d, duration: d / 1.25 };
+    }
+    if (!walkLine) walkLine = L.polyline([], { color: "#2563eb", weight: 4, dashArray: "2 8", lineCap: "round" }).addTo(map);
+    walkLine.setLatLngs(walk.path);
+    if (!bus || !follow) map.fitBounds(L.latLngBounds([me, [s.lat, s.lon], ...(bus ? [bus.getLatLng()] : [])]).pad(.2));
+  }
+  render();
+}
+
+function banner(html, cls = "") { $("banner").innerHTML = html; $("banner").className = "banner " + cls; }
+
+function renderBanner(etas) {
+  if (!me || !walk || myIdx < 0) return;
+  const s = STOPS[myIdx], walkMin = Math.ceil(walk.duration / 60);
+  const walkTxt = `${walkMin} min walk (${(walk.distance / 1000).toFixed(1)} km) to <b>${s.name}</b>`;
+  if (myIdx < nextIdx) return banner(`The bus has already passed ${s.name}. ${walkTxt}.`, "late");
+  if (!etas) return banner(`${walkTxt}.<br>Waiting for the bus's GPS position…`);
+  const busMin = Math.round(etas[myIdx] / 60), spare = busMin - walkMin;
+  if (spare < 0)       banner(`Bus reaches ${s.name} in <b>${busMin} min</b>, but it's a ${walkMin} min walk. <b>You'll likely miss it.</b>`, "late");
+  else if (spare <= 3) banner(`🏃 <b>Leave now!</b> Bus reaches ${s.name} in ${busMin} min · ${walkTxt}.`, "go");
+  else                 banner(`Bus reaches ${s.name} in <b>${busMin} min</b> · ${walkTxt}.<br>Leave in about <b>${spare - 2} min</b>.`, "go");
+}
+
+// ---------- alerts + render ----------
+function renderAlert() {
+  const age = lastMsgAt ? (Date.now() - lastMsgAt) / 1000 : 0;
+  let msg = "", cls = "bad";
+  if (busOnline === false)          msg = "⚠ Bus tracker is offline (device lost power or network).";
+  else if (lastMsgAt && age > STALE_S) msg = `⚠ No update for ${Math.round(age)} s. Position may be out of date.`;
+  else if (last && !last.fix)      { msg = "📡 Bus GPS is searching for satellites. Position unknown."; cls = "warn"; }
+  $("alert").textContent = msg;
+  $("alert").className = `alert ${cls} ${msg ? "show" : ""}`;
+}
+function render() {
+  const etas = busEtas();
+  renderStops(etas);
+  renderBanner(etas);
+  renderAlert();
+}
+render();
+
+// ---------- MQTT ----------
+function pill(el, text, cls) { el.textContent = text; el.className = "pill " + cls; }
 let client;
 function connect() {
   if (client) client.end(true);
@@ -145,14 +316,27 @@ function connect() {
     const msg = buf.toString();
     console.log(topic, msg);
     if (topic.endsWith("/status")) {
-      pill($("status"), msg, msg === "online" ? "ok" : "bad");
+      busOnline = msg === "online";
+      pill($("status"), busOnline ? "bus online" : "bus offline", busOnline ? "ok" : "bad");
+      render();
     } else {
       try { onLocation(JSON.parse(msg)); } catch (e) { console.warn("bad JSON", msg); }
     }
   });
 }
 
-$("apply").onclick = () => { PREFIX = $("topic").value.trim(); firstFix = true; lastPos = null; connect(); };
+// ---------- controls ----------
+$("whereBtn").onclick = startLocating;
+$("myStop").onchange = () => { walkKey = ""; updateWalk(); };
+$("followBtn").onclick = () => {
+  follow = !follow; $("followBtn").classList.toggle("on", follow);
+  if (follow && bus) map.setView(bus.getLatLng(), 16);
+};
+$("meBtn").onclick = () => me ? map.setView(me, 16) : startLocating();
+$("fitBtn").onclick = () => { follow = false; $("followBtn").classList.remove("on"); map.fitBounds(routeLine.getBounds().pad(.1)); };
+map.on("dragstart", () => { follow = false; $("followBtn").classList.remove("on"); });   // like Google Maps: dragging stops following
+$("toggle").onclick = () => { $("panel").classList.toggle("collapsed"); $("toggle").textContent = $("panel").classList.contains("collapsed") ? "▴" : "▾"; };
+$("apply").onclick = () => { PREFIX = $("topic").value.trim(); lastPos = null; connect(); };
 
 // Publishes one fake point so you can check the map works without the ESP32
 let testI = 0;
@@ -166,7 +350,8 @@ setInterval(() => {
   if (!lastMsgAt) return;
   const s = Math.round((Date.now() - lastMsgAt) / 1000);
   $("ago").textContent = `${s}s ago`;
-  $("ago").style.color = s > 15 ? "var(--bad)" : "";
+  $("ago").style.color = s > STALE_S ? "var(--bad)" : "";
+  renderAlert();
 }, 1000);
 
 connect();
