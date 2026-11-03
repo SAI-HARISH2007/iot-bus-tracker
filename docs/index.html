@@ -91,7 +91,6 @@ roadPath(STOPS.map(s => [s.lat, s.lon]))
 
 const busIcon = L.divIcon({ html: "<div style='font-size:28px'>🚌</div>", className: "", iconSize: [32, 32], iconAnchor: [16, 16] });
 let bus = null;
-const trail = L.polyline([], { color: "#d92d20", weight: 4 }).addTo(map);
 let lastMsgAt = 0, firstFix = true;
 
 function pill(el, text, cls) { el.textContent = text; el.className = "pill " + cls; }
@@ -127,7 +126,6 @@ async function moveTo(p) {
   const stepMs = Math.min(40, 4000 / path.length);  // finish before the next 5 s update
   for (const q of path) {
     bus.setLatLng(q);
-    trail.addLatLng(q);
     if (path.length > 1) await new Promise(r => setTimeout(r, stepMs));
   }
 }
@@ -154,7 +152,7 @@ function connect() {
   });
 }
 
-$("apply").onclick = () => { PREFIX = $("topic").value.trim(); firstFix = true; lastPos = null; trail.setLatLngs([]); connect(); };
+$("apply").onclick = () => { PREFIX = $("topic").value.trim(); firstFix = true; lastPos = null; connect(); };
 
 // Publishes one fake point so you can check the map works without the ESP32
 let testI = 0;
