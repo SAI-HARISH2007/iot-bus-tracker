@@ -51,9 +51,12 @@
             box-shadow:0 0 0 6px #2563eb40; }
   #toggle { display:none; border:none; background:none; font-size:18px; padding:0 4px; }
   @media (max-width:600px) {
-    .panel { left:8px; right:8px; width:auto; top:auto; bottom:8px; max-height:55%; }
+    .panel { left:8px; right:8px; width:auto; top:auto; bottom:20px; max-height:55%; padding:10px 12px; }
+    .panel h1 { margin-bottom:4px; }
+    .banner { margin:6px 0 0; padding:8px 10px; font-size:13px; } .banner b { font-size:14px; }
     .panel.collapsed { max-height:none; overflow:hidden; }
-    .panel.collapsed > :not(h1):not(.banner):not(.alert) { display:none; }
+    .panel.collapsed > :not(h1):not(.banner):not(.alert):not(#whereBtn) { display:none; }
+    body.located .panel.collapsed #whereBtn { display:none; }
     #toggle { display:inline; }
     .fab { left:auto; right:12px; bottom:auto; top:12px; }
   }
@@ -201,6 +204,31 @@ function onLocation(d) {
   render();
 }
 
+// The part of the map the panel doesn't cover, as padding for fitBounds.
+const isMobile = () => matchMedia("(max-width:600px)").matches;
+function viewPad() {
+  const r = $("panel").getBoundingClientRect();
+  return isMobile() ? { paddingTopLeft: [20, 20], paddingBottomRight: [70, r.height + 36] }
+                    : { paddingTopLeft: [70, 20], paddingBottomRight: [r.width + 32, 20] };
+}
+
+// Follow mode: pan only when the bus nears the edge of the visible area, and never change the
+// zoom. Otherwise the map shifts on every 5 s update and fights the user's pinch-zoom.
+let userZooming = false, autoPanning = false;
+map.on("zoomstart", () => userZooming = true);
+map.on("zoomend", () => userZooming = false);
+function keepBusInView(q) {
+  if (userZooming || autoPanning) return;
+  const size = map.getSize(), pad = viewPad(), pt = map.latLngToContainerPoint(q);
+  const [l, t] = pad.paddingTopLeft, [r, b] = pad.paddingBottomRight;
+  const w = size.x - l - r, h = size.y - t - b;
+  const inside = pt.x > l + w * .2 && pt.x < l + w * .8 && pt.y > t + h * .2 && pt.y < t + h * .8;
+  if (inside) return;
+  autoPanning = true;
+  map.once("moveend", () => autoPanning = false);
+  map.panBy([pt.x - (l + w / 2), pt.y - (t + h / 2)], { duration: .4 });
+}
+
 // Moves the bus to p. Gaps over 100 m (replay mode jumps stop to stop) are routed along roads
 // and animated; short real-GPS gaps are already on the road, so they're drawn directly.
 let moveQueue = Promise.resolve(), lastPos = null;
@@ -213,22 +241,25 @@ async function moveTo(p) {
   const stepMs = Math.min(40, 4000 / path.length);  // finish before the next 5 s update
   for (const q of path) {
     bus.setLatLng(q);
-    if (follow) map.panTo(q, { animate: false });
+    if (follow) keepBusInView(q);
     if (path.length > 1) await new Promise(r => setTimeout(r, stepMs));
   }
 }
 
 // ---------- "Where's my bus?": the rider's phone location + walking route to their stop ----------
-let me = null, meMarker = null, walkLine = null, walk = null, myIdx = -1, walkKey = "";
+let me = null, meMarker = null, walkLine = null, walk = null, myIdx = -1;
+let watchId = null, fitNext = false, routedFrom = null, routedIdx = -1;
 function startLocating() {
   if (!navigator.geolocation) return banner("This browser can't share location.", "late");
+  fitNext = true;
+  if (watchId !== null) return updateWalk();
   banner("Finding your location…");
-  navigator.geolocation.watchPosition(pos => {
+  watchId = navigator.geolocation.watchPosition(pos => {
     me = [pos.coords.latitude, pos.coords.longitude];
     if (!meMarker) {
       meMarker = L.marker(me, { icon: L.divIcon({ html: "<div class='me-dot'></div>", className: "", iconSize: [22, 22], iconAnchor: [11, 11] }) })
         .addTo(map).bindTooltip("You");
-      follow = false; $("followBtn").classList.remove("on");
+      document.body.classList.add("located");
     } else meMarker.setLatLng(me);
     updateWalk();
   }, err => banner(`Location blocked (${err.message}). Allow location for this site and try again.`, "late"),
@@ -251,10 +282,9 @@ async function updateWalk() {
   if (!me) return;
   myIdx = pickMyStop();
   const s = STOPS[myIdx];
-  // Re-route only when the stop changes or the rider moves ~50 m (keeps the free router happy)
-  const key = `${myIdx}:${me[0].toFixed(4)},${me[1].toFixed(4)}`;
-  if (key !== walkKey) {
-    walkKey = key;
+  // Re-route only when the stop changes or the rider moves 50 m (keeps the free router happy)
+  if (myIdx !== routedIdx || !routedFrom || map.distance(routedFrom, me) > 50) {
+    routedIdx = myIdx; routedFrom = me;
     try { walk = await osrm([me, [s.lat, s.lon]], "walk"); }
     catch (e) {   // fallback: straight line at 4.5 km/h, 1.3x for street detours
       const d = map.distance(me, [s.lat, s.lon]) * 1.3;
@@ -262,7 +292,11 @@ async function updateWalk() {
     }
     if (!walkLine) walkLine = L.polyline([], { color: "#2563eb", weight: 4, dashArray: "2 8", lineCap: "round" }).addTo(map);
     walkLine.setLatLngs(walk.path);
-    if (!bus || !follow) map.fitBounds(L.latLngBounds([me, [s.lat, s.lon], ...(bus ? [bus.getLatLng()] : [])]).pad(.2));
+  }
+  // Refit only when the rider asked (button or stop change), never because their GPS wobbled
+  if (fitNext && walk) {
+    fitNext = false;
+    map.fitBounds(L.latLngBounds([me, [s.lat, s.lon], ...(bus ? [bus.getLatLng()] : [])]), viewPad());
   }
   render();
 }
@@ -326,16 +360,22 @@ function connect() {
 }
 
 // ---------- controls ----------
-$("whereBtn").onclick = startLocating;
-$("myStop").onchange = () => { walkKey = ""; updateWalk(); };
+$("whereBtn").onclick = () => { if (isMobile()) setCollapsed(true); startLocating(); };
+$("myStop").onchange = () => { fitNext = true; routedIdx = -1; updateWalk(); };
 $("followBtn").onclick = () => {
   follow = !follow; $("followBtn").classList.toggle("on", follow);
   if (follow && bus) map.setView(bus.getLatLng(), 16);
 };
-$("meBtn").onclick = () => me ? map.setView(me, 16) : startLocating();
+$("meBtn").onclick = () => {
+  if (!me) return startLocating();
+  follow = false; $("followBtn").classList.remove("on");
+  map.setView(me, 16);
+};
 $("fitBtn").onclick = () => { follow = false; $("followBtn").classList.remove("on"); map.fitBounds(routeLine.getBounds().pad(.1)); };
 map.on("dragstart", () => { follow = false; $("followBtn").classList.remove("on"); });   // like Google Maps: dragging stops following
-$("toggle").onclick = () => { $("panel").classList.toggle("collapsed"); $("toggle").textContent = $("panel").classList.contains("collapsed") ? "▴" : "▾"; };
+function setCollapsed(c) { $("panel").classList.toggle("collapsed", c); $("toggle").textContent = c ? "▴" : "▾"; }
+$("toggle").onclick = () => setCollapsed(!$("panel").classList.contains("collapsed"));
+if (isMobile()) setCollapsed(true);   // phones open map-first; ▴ shows the stops
 $("apply").onclick = () => { PREFIX = $("topic").value.trim(); lastPos = null; connect(); };
 
 // Publishes one fake point so you can check the map works without the ESP32
